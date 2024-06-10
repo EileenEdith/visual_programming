@@ -4,16 +4,16 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QListWidget,
     QListWidgetItem, 
     QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QMenuBar, 
-    QStatusBar, QLabel, QLineEdit, QPushButton
+    QStatusBar, QLabel, QLineEdit, QPushButton, QToolBar
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QIcon,QAction
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 import matplotlib.image as mpimg
-import matplotlib.pyplot as plt  # Import added
+import matplotlib.pyplot as plt
 
 class ImageCanvas(FigureCanvas):
     def __init__(self, parent=None):
@@ -31,6 +31,8 @@ class ImageCanvas(FigureCanvas):
         self.start_point = None
         self.end_point = None
         self.rect = None
+        self.pen_active = False
+        self.lines = []
 
         self.mpl_connect('button_press_event', self.on_click)
         self.mpl_connect('motion_notify_event', self.on_motion)
@@ -52,14 +54,23 @@ class ImageCanvas(FigureCanvas):
         self.draw()
 
     def on_click(self, event):
-        if event.button == 1 and event.inaxes:  # Left mouse button
-            self.start_point = (event.xdata, event.ydata)
-            if self.rect:
-                self.rect.remove()
-                self.rect = None
+        if event.button == 1 and event.inaxes:
+            if self.pen_active:
+                self.start_point = (event.xdata, event.ydata)
+                self.lines.append([self.start_point])
+            else:
+                self.start_point = (event.xdata, event.ydata)
+                if self.rect:
+                    self.rect.remove()
+                    self.rect = None
 
     def on_motion(self, event):
-        if self.start_point and event.inaxes:
+        if self.pen_active and self.start_point and event.inaxes:
+            self.lines[-1].append((event.xdata, event.ydata))
+            x, y = zip(*self.lines[-1])
+            self.ax.plot(x, y, color='red')
+            self.draw()
+        elif not self.pen_active and self.start_point and event.inaxes:
             if self.rect:
                 self.rect.remove()
             x0, y0 = self.start_point
@@ -70,10 +81,21 @@ class ImageCanvas(FigureCanvas):
             self.draw()
 
     def on_release(self, event):
-        if event.button == 1 and self.start_point and event.inaxes:  # Left mouse button
+        if self.pen_active and event.button == 1 and self.start_point and event.inaxes:
+            self.start_point = None
+            self.draw()
+        elif not self.pen_active and event.button == 1 and self.start_point and event.inaxes:
             self.end_point = (event.xdata, event.ydata)
             self.start_point = None
             self.draw()
+
+    def toggle_pen(self):
+        self.pen_active = not self.pen_active
+        if self.pen_active:
+            self.ax.set_title('Pen Mode: ON')
+        else:
+            self.ax.set_title('Pen Mode: OFF')
+        self.draw()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -130,27 +152,50 @@ class MainWindow(QMainWindow):
         open_action = QAction("Open Directory", self)
         open_action.triggered.connect(self.open_directory)
         file_menu.addAction(open_action)
+
+        # 툴바 설정
+        self.toolbar = QToolBar("Main Toolbar")
+        self.addToolBar(self.toolbar)
+
+        pen_action = QAction(QIcon(None), "Toggle Pen", self)
+        pen_action.triggered.connect(self.canvas.toggle_pen)
+        self.toolbar.addAction(pen_action)
     
+        self.current_directory = None
+        self.current_image_index = -1
+        self.png_files = []
+        
         self.show()
 
     def open_directory(self):
         # 디렉토리 선택 다이얼로그 열기
         directory = QFileDialog.getExistingDirectory(self, "Select Directory")
         if directory:
+            self.current_directory = directory
             self.list_widget.clear()
-            # 디렉토리의 png 파일 목록 가져오기
-            png_files = [f for f in os.listdir(directory) if f.endswith('.png')]
-            for png_file in png_files:
+            self.png_files = [f for f in os.listdir(directory) if f.endswith('.png')]
+            for png_file in self.png_files:
                 item = QListWidgetItem(png_file)
                 item.setData(Qt.UserRole, os.path.join(directory, png_file))
                 self.list_widget.addItem(item)
+            self.current_image_index = 0
+            if self.png_files:
+                self.display_image()
 
     def on_item_clicked(self, item):
         # 선택된 아이템의 파일 경로를 가져와서 이미지 표시
         file_path = item.data(Qt.UserRole)
-        self.canvas.display_image(file_path)
-        self.status_bar.showMessage(file_path)
-        self.current_image_path = file_path
+        self.current_image_index = self.png_files.index(os.path.basename(file_path))
+        self.display_image()
+        
+    def display_image(self):
+        if 0 <= self.current_image_index < len(self.png_files):
+            file_path = os.path.join(self.current_directory, self.png_files[self.current_image_index])
+            self.canvas.display_image(file_path)
+            self.status_bar.showMessage(f'{file_path} ({self.current_image_index + 1}/{len(self.png_files)})')
+            self.list_widget.blockSignals(True)
+            self.list_widget.setCurrentRow(self.current_image_index)
+            self.list_widget.blockSignals(False)
 
     def save_labeled_image(self):
         label = self.label_edit.text()
@@ -160,6 +205,15 @@ class MainWindow(QMainWindow):
             save_path = self.current_image_path.replace('.png', f'_{label}.png')
             self.canvas.save_image(save_path)
             self.status_bar.showMessage(f"Labeled image saved to {save_path}")
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Right:
+            self.current_image_index = (self.current_image_index + 1) % len(self.png_files)
+            self.display_image()
+        elif event.key() == Qt.Key_Left:
+            self.current_image_index = (self.current_image_index - 1) % len(self.png_files)
+            self.display_image()
+        super().keyPressEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
