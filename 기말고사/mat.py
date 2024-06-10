@@ -76,15 +76,4 @@ if __name__ == "__main__":
     sys.exit(app.exec())          # 애플리케이션 이벤트 루프 시작
     
     
-    def load_image(self):
-        file_name, _ = QFileDialog.getOpenFileName(self,
-                                                   "Open Image",
-                                                   "",
-                                                   "Image Files(* .png *.jpg *.bmp)")
-        if file_name:
-            self.image = imread(file_name)
-            print(type(self.image))
-            self.ax.clear()
-            self.ax.imshow(self.image)
-            self.ax.axis('on')
-            self.canvas.draw
+    
